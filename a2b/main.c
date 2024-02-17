@@ -37,6 +37,54 @@ build_dns_header
     return status;
 }
 
+// Need a new strlen implementation that stops a string
+// at a DNS compressed name pointer as well as the null
+// character. Implemented here.
+ZSTATUS
+dns_strlen
+(
+    char*       Str,
+    size_t*     Len
+)
+{
+    ZSTATUS     status          = ZSTATUS_FAILED;
+    uint8_t     cur             = 0;
+
+    if( Str && Len )
+    {
+        *Len = 0;
+
+        while(1)
+        {
+            cur = (uint8_t)Str[*Len];
+            // null
+            if( cur == 0 )
+            {
+                status = ZSTATUS_OK;
+                break;
+            }
+            // ptr
+            else if( cur >= 0xc0 )
+            {
+                *Len += 1;
+                status = ZSTATUS_OK;
+                break;
+            }
+            // normal char
+            else
+            {
+                *Len += 1;
+            }
+        }
+    }
+    else
+    {
+        status = ZSTATUS_INVALID_ARGS;
+    }
+
+    return status;
+}
+
 // process from hostname string into an array of the form
 // <len1><label1><len2><lable2>...0x00
 ZSTATUS
@@ -131,22 +179,58 @@ print_name_at_offset
 {
     ZSTATUS     status          = ZSTATUS_FAILED;
     size_t      name_len        = 0;
+    uint16_t    name_offset     = 0;
 
-    name_len = strlen((char*)(Buf+Offset));
-    printf("Name:\t\t");
-    for( size_t j = 1; j < name_len; j++ )
+    if( Buf )
     {
-        if( Buf[j + Offset] < 64 )
+        if( Buf[Offset] < 64 )
         {
-            printf(".");
+            status = dns_strlen((char*)(Buf+Offset), &name_len );
+            if( ZSTATUS_OK == status )
+            {
+
+                for( size_t j = 1; j < name_len; j++ )
+                {
+                    // setting max here to 48 to allow numbers in a hostname.
+                    // technically should be 64 if we strictly want to use the
+                    // top two bits as a flag.
+                    if( Buf[j + Offset] < 48 )
+                    {
+                        printf(".");
+                    }
+                    // compressed lable ptr starts at 0xc0 == 192
+                    else if( Buf[j + Offset] < 192 )
+                    {
+                        printf("%c", Buf[j + Offset]);
+                    }
+                    else
+                    {
+                        // Found a pointer to an earlier name. Calculate offset
+                        // and print starting at that spot.
+                        // RFC 1035 section 4.1.4
+
+                        name_offset = ntohs(*(uint16_t*)(Buf + Offset + j)) - 0xc000;
+                        printf(".");
+                        status = print_name_at_offset( Buf, name_offset );
+                        // skip over next byte, it was used above.
+                        j += 1;
+                    }
+                }
+            }
         }
         else
         {
-            printf("%c", Buf[j + Offset]);
+            // called this func directly on a compressed name
+            name_offset = ntohs(*(uint16_t*)(Buf + Offset)) - 0xc000;
+            status = print_name_at_offset( Buf, name_offset );
         }
-
     }
-    printf("\n");
+    else
+    {
+        status = ZSTATUS_INVALID_ARGS;
+    }
+
+
     status = ZSTATUS_OK;
     return status;
 }
@@ -155,7 +239,7 @@ print_name_at_offset
 // DataOffset is the offset within the response buffer that
 // points to the data section of the RR in question.
 ZSTATUS
-process_data_type1
+process_data_A
 (
     uint8_t*    Buf,
     uint32_t    DataOffset,
@@ -187,15 +271,52 @@ process_data_type1
     return status;
 }
 
+// processes and prints data field from a Type 5 (CNAME) response.
+// DataOffset is the offset within the response buffer that
+// points to the data section of the RR in question.
+// Does NOT increment the main CurOffset
+ZSTATUS
+process_data_CNAME
+(
+    uint8_t*    Buf,
+    uint32_t    DataOffset
+)
+{
+    ZSTATUS         status          = ZSTATUS_FAILED;
+    size_t          name_len        = 0;
+
+    if( Buf )
+    {
+        // Deals with CNAME field
+        printf("CNAME:\t\t");
+        status = print_name_at_offset( Buf, DataOffset );
+        printf("\n");
+
+        if( ZSTATUS_OK == status )
+        {
+            status = dns_strlen((char*)(Buf + DataOffset), &name_len );
+            if( ZSTATUS_OK == status )
+            {
+                DataOffset += name_len + 1;
+            }
+        }
+    }
+    else
+    {
+        status = ZSTATUS_INVALID_ARGS;
+    }
+
+    return status;
+}
+
 // proccesses and prints a general type 1 RR response.
-// increments CurOffset as needed, sets NameOffset if
+// INCREMENTS CurOffset as needed, sets NameOffset if
 // name in response not seen yet.
 ZSTATUS
 process_general_rr
 (
     uint8_t*    Buf,
-    uint32_t*   CurOffset,
-    uint32_t*   NameOffset
+    uint32_t*   CurOffset
 )
 {
     ZSTATUS         status          = ZSTATUS_FAILED;
@@ -203,21 +324,20 @@ process_general_rr
     uint16_t        type            = 0;
     uint16_t        rd_len          = 0;
 
-    if( Buf && CurOffset && NameOffset )
+    if( Buf && CurOffset )
     {
-        if( Buf[*CurOffset] < 64 )
+        printf("Name:\t\t");
+        status = print_name_at_offset( Buf, *CurOffset );
+        printf("\n");
+
+        if( ZSTATUS_OK == status )
         {
-            *NameOffset = *CurOffset;
-            name_len = strlen((char*)(Buf + *CurOffset));
-            *CurOffset += name_len + 1;
+            status = dns_strlen((char*)(Buf + *CurOffset), &name_len );
+            if( ZSTATUS_OK == status )
+            {
+                *CurOffset += name_len + 1;
+            }
         }
-        else
-        {
-            // must have seen the name before and it is now
-            // compressed ( see RFC 1035 section 4.1.4 ).
-            *CurOffset += 2;
-        }
-        status = print_name_at_offset( Buf, *NameOffset );
 
         if( ZSTATUS_OK == status )
         {
@@ -241,7 +361,11 @@ process_general_rr
 
             if( type == 1 )
             {
-                status = process_data_type1( Buf, *CurOffset, rd_len );
+                status = process_data_A( Buf, *CurOffset, rd_len );
+            }
+            else if( type == 5 )
+            {
+                status = process_data_CNAME( Buf, *CurOffset );
             }
             else
             {
@@ -277,7 +401,6 @@ process_response
     uint16_t        num_authority   = 0;
     uint16_t        num_additional  = 0;
     uint32_t        cur_offset      = 0;
-    uint32_t        name_offset     = 0;
     size_t          name_len        = 0;
 
     if( Buf )
@@ -304,19 +427,17 @@ process_response
             printf("\nQuestion Responses:\n");
             for(uint16_t i = 0; i < num_questions; i++)
             {
-                if( Buf[cur_offset] < 64 )
+                status = print_name_at_offset( Buf, cur_offset );
+                printf("\n");
+
+                if( ZSTATUS_OK == status )
                 {
-                    name_offset = cur_offset;
-                    name_len = strlen((char*)(Buf+cur_offset));
-                    cur_offset += name_len + 1;
+                    status = dns_strlen((char*)(Buf + cur_offset), &name_len );
+                    if( ZSTATUS_OK == status )
+                    {
+                        cur_offset += name_len + 1;
+                    }
                 }
-                else
-                {
-                    // must have seen the name before and it is now
-                    // compressed ( see RFC 1035 section 4.1.4 ).
-                    cur_offset += 2;
-                }
-                status = print_name_at_offset( Buf, name_offset );
 
                 if( ZSTATUS_OK == status )
                 {
@@ -342,7 +463,7 @@ process_response
             printf("\nAnswer Responses:\n");
             for(uint16_t i = 0; i < num_answers; i++)
             {
-                status = process_general_rr( Buf, &cur_offset, &name_offset );
+                status = process_general_rr( Buf, &cur_offset );
                 if( ZSTATUS_OK != status ) break;
             }
         }
@@ -352,7 +473,7 @@ process_response
             printf("\nAuthority Responses:\n");
             for(uint16_t i = 0; i < num_authority; i++)
             {
-                status = process_general_rr( Buf, &cur_offset, &name_offset );
+                status = process_general_rr( Buf, &cur_offset );
                 if( ZSTATUS_OK != status ) break;
             }
         }
@@ -362,7 +483,7 @@ process_response
             printf("\nAdditional Responses:\n");
             for(uint16_t i = 0; i < num_authority; i++)
             {
-                status = process_general_rr( Buf, &cur_offset, &name_offset );
+                status = process_general_rr( Buf, &cur_offset );
                 if( ZSTATUS_OK != status ) break;
             }
         }

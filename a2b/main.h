@@ -17,7 +17,7 @@
 
 // we are allowed 64 byte domain names, including the null terminator.
 // -RFC 1035
-#define MAX_HOSTNAME_SIZE       0x40
+#define MAX_HOSTNAME_SIZE   0x40
 #define SEND_BUF_SIZE       0x100
 #define RECV_BUF_SIZE       0x1000
 #define RR_OFFSET           0xc
@@ -27,6 +27,16 @@ ZSTATUS
 build_dns_header
 (
     uint8_t* send_buf
+);
+
+// Need a new strlen implementation that stops a string
+// at a DNS compressed name pointer as well as the null
+// character. Implemented here.
+ZSTATUS
+dns_strlen
+(
+    char*       Str,
+    size_t*     Len
 );
 
 ZSTATUS
@@ -50,7 +60,7 @@ print_name_at_offset
 );
 
 ZSTATUS
-process_data_type1
+process_data_A
 (
     uint8_t*    Buf,
     uint32_t    DataOffset,
@@ -59,11 +69,17 @@ process_data_type1
 );
 
 ZSTATUS
+process_data_CNAME
+(
+    uint8_t*    Buf,
+    uint32_t    DataOffset
+);
+
+ZSTATUS
 process_general_rr
 (
     uint8_t*    Buf,
-    uint32_t*   CurOffset,
-    uint32_t*   NameOffset
+    uint32_t*   CurOffset
 );
 
 ZSTATUS
