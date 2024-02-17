@@ -1,5 +1,6 @@
-#include "main.h"
+#include "include/main.h"
 
+// Just builds out the first few bytes of a DNS request.
 ZSTATUS
 build_dns_header
 (
@@ -85,6 +86,47 @@ dns_strlen
     return status;
 }
 
+// Gets the hostname from the user, does
+// some preprocessing.
+ZSTATUS
+get_hostname
+(
+    char* Hostname
+)
+{
+    ZSTATUS     status      = ZSTATUS_FAILED;
+
+    if( Hostname )
+    {
+        // get hostname from user
+        printf("Please enter a hostname\n");
+        fgets( Hostname, MAX_HOSTNAME_SIZE, stdin );
+
+        // fgets will always append a null terminator, and will append the newline
+        // if there is space. Could get crafty with retries but that would involve
+        // flushing the stdin buffer, just exit and retry.
+        if( strlen(Hostname) == MAX_HOSTNAME_SIZE - 1)
+        {
+            printf("\nPlease enter a shorter hostname\n");
+            status = ZSTATUS_INVALID_INPUT;
+        }
+        else
+        {
+            // get rid of newline from fgets
+            Hostname[ strlen(Hostname) - 1 ] = 0x00;
+            status = ZSTATUS_OK;
+        }
+    }
+    else
+    {
+        printf("\nprocess_hostname: hostname addr invalid.\n");
+        status = ZSTATUS_INVALID_ARGS;
+    }
+
+    return status;
+
+}
+
 // process from hostname string into an array of the form
 // <len1><label1><len2><lable2>...0x00
 ZSTATUS
@@ -127,49 +169,13 @@ process_hostname
     return status;
 }
 
-ZSTATUS
-get_hostname
-(
-    char* Hostname
-)
-{
-    ZSTATUS     status      = ZSTATUS_FAILED;
-
-    if( Hostname )
-    {
-        // get hostname from user
-        printf("Please enter a hostname\n");
-        fgets( Hostname, MAX_HOSTNAME_SIZE, stdin );
-
-        // fgets will always append a null terminator, and will append the newline
-        // if there is space. Could get crafty with retries but that would involve
-        // flushing the stdin buffer, just exit and retry.
-        if( strlen(Hostname) == MAX_HOSTNAME_SIZE - 1)
-        {
-            printf("\nPlease enter a shorter hostname\n");
-            status = ZSTATUS_INVALID_INPUT;
-        }
-        else
-        {
-            // get rid of newline from fgets
-            Hostname[ strlen(Hostname) - 1 ] = 0x00;
-            status = ZSTATUS_OK;
-        }
-    }
-    else
-    {
-        printf("\nprocess_hostname: hostname addr invalid.\n");
-        status = ZSTATUS_INVALID_ARGS;
-    }
-
-    return status;
-
-}
-
 // need to do this to add dots back in.
 // according to RFC 1035, top 2 bits being 0
 // indicates a size marker, so we turn these
 // into dots. Otherwise just print the char.
+//
+// Also has to deal with compressed names,
+// does so with recursive calls to itself.
 ZSTATUS
 print_name_at_offset
 (
@@ -387,6 +393,7 @@ process_general_rr
 
     return status;
 }
+
 // processes the data received and prints it to
 // the terminal window.
 ZSTATUS

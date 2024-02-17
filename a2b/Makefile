@@ -5,7 +5,7 @@ CC = gcc
 CFLAGS = -Wall -Wextra -Iinclude -lm -g
 
 # Source dirs
-SRC_DIRS = ./
+SRC_DIRS = ./src/
 
 # Source files
 SRC_FILES = $(shell find $(SRC_DIRS) -name '*.c')
